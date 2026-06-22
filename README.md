@@ -124,6 +124,7 @@ Models not declared in any profile fall into the synthetic `general` group. The 
 | `vllmctl command <name>` | Print the underlying vLLM command |
 | `vllmctl profile list \| show <p>` | Inspect profiles defined in config |
 | `vllmctl tui` | Launch the Textual TUI |
+| `vllmctl doctor` | Diagnose local setup (Python, venv, vllm, GPUs, ports, ...) |
 | `vllmctl completion <shell>` | Print shell completion script (bash, zsh, fish, powershell) |
 
 Run `vllmctl <command> --help` for full options.

@@ -777,6 +777,48 @@ def tui(
 
 
 @app.command()
+def doctor() -> None:
+    """Diagnose the local vllmctl setup.
+
+    Runs a series of read-only checks against the environment, the project
+    config, and the model catalog. Exits with code 1 if any check fails.
+    Warnings do not affect the exit code, so you can chain `vllmctl doctor &&
+    vllmctl start --profile prod` in scripts and CI.
+    """
+    from vllmctl import doctor as doctor_module  # noqa: PLC0415
+
+    results = doctor_module.run_checks()
+
+    table = Table(box=None, show_header=False, padding=(0, 1))
+    table.add_column(width=4)
+    table.add_column("Check")
+    table.add_column("Detail")
+    for result in results:
+        if result.status == "ok":
+            label = "[green]OK  [/green]"
+        elif result.status == "warn":
+            label = "[yellow]WARN[/yellow]"
+        else:
+            label = "[red]FAIL[/red]"
+        table.add_row(label, result.name, result.detail)
+        if result.hint:
+            table.add_row("", "", f"[dim]hint: {result.hint}[/dim]")
+    console.print(table)
+
+    ok = sum(1 for r in results if r.status == "ok")
+    warn = sum(1 for r in results if r.status == "warn")
+    fail = sum(1 for r in results if r.status == "fail")
+    summary = f"[green]{ok} passed[/green]"
+    if warn:
+        summary += f", [yellow]{warn} warning{'s' if warn != 1 else ''}[/yellow]"
+    if fail:
+        summary += f", [bold red]{fail} issue{'s' if fail != 1 else ''}[/bold red]"
+    console.print(f"\n{summary}")
+    if fail:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def completion(
     shell: str = typer.Argument(
         ..., help="Shell to generate completion for: bash, zsh, fish, or powershell."

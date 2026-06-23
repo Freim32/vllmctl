@@ -493,8 +493,14 @@ def can_smoke_test(entry: CatalogEntry) -> bool:
 
 
 def can_copy_logs(project: Project, entry: CatalogEntry) -> bool:
-    """True if there is a log file on disk for this entry."""
-    return runtime_paths_for(project, entry.name).log_path.is_file()
+    """True if the log file exists on disk and has at least one byte written."""
+    log_path = runtime_paths_for(project, entry.name).log_path
+    if not log_path.is_file():
+        return False
+    try:
+        return log_path.stat().st_size > 0
+    except OSError:
+        return False
 
 
 @dataclass(frozen=True)

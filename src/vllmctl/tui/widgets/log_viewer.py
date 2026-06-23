@@ -52,6 +52,9 @@ class LogViewer(Vertical):
         with Vertical(id="log-placeholder"):
             yield self._placeholder_body
 
+    def on_mount(self) -> None:
+        self._show_placeholder("[dim]no model selected[/dim]")
+
     def attach(self, path: Path | None, label: str) -> None:
         """Switch to a new log file. Resets buffer and seeks to end."""
         self.border_title = f"Logs · {label}"
@@ -97,6 +100,8 @@ class LogViewer(Vertical):
         text = chunk.decode("utf-8", errors="replace")
         for line in text.splitlines():
             self._log.write(highlight_log_line(line))
+        if not self._log.display:
+            self._show_log()
 
     def _show_placeholder(self, message: str) -> None:
         self._placeholder_body.update(message)

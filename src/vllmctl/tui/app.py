@@ -177,7 +177,7 @@ class VllmctlApp(App):
         self._errors.display = False
         self._refresh_statuses()
         self.set_interval(STATUS_REFRESH_SECONDS, self._refresh_statuses)
-        self.set_interval(LOG_POLL_SECONDS, self._logs.poll)
+        self.set_interval(LOG_POLL_SECONDS, self._poll_logs)
         self.set_interval(METRICS_SCRAPE_SECONDS, self._scrape_all_async)
         self.run_worker(self._scrape_all(), exclusive=False)
 
@@ -231,6 +231,12 @@ class VllmctlApp(App):
         self._update_header_subtitle()
         self._sync_log_attachment()
         self._render_metrics_panel()
+        self.refresh_bindings()
+
+    def _poll_logs(self) -> None:
+        """LogViewer poll plus a footer refresh so `c` (copy logs) tracks the
+        first byte landing on disk without waiting for the 2s status tick."""
+        self._logs.poll()
         self.refresh_bindings()
 
     def _refresh_gpu_indices(self) -> None:

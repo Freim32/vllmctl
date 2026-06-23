@@ -466,7 +466,16 @@ def test_can_copy_logs_rejects_when_log_missing(project: Project) -> None:
     assert service.can_copy_logs(project, entries[0]) is False
 
 
-def test_can_copy_logs_accepts_when_log_exists(project: Project) -> None:
+def test_can_copy_logs_rejects_when_log_empty(project: Project) -> None:
+    write_model_yaml(project, "x", sleeper_payload("x", port=18001))
+    paths = service.runtime_paths_for(project, "x")
+    paths.log_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.log_path.write_text("", encoding="utf-8")
+    entries = service.list_catalog_entries(project)
+    assert service.can_copy_logs(project, entries[0]) is False
+
+
+def test_can_copy_logs_accepts_when_log_has_content(project: Project) -> None:
     write_model_yaml(project, "x", sleeper_payload("x", port=18001))
     paths = service.runtime_paths_for(project, "x")
     paths.log_path.parent.mkdir(parents=True, exist_ok=True)

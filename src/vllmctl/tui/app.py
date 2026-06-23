@@ -89,6 +89,7 @@ class VllmctlApp(App):
         Binding("R", "refresh_now", "Refresh"),
         Binding("e", "edit_model", "Edit YAML"),
         Binding("c", "copy_logs", "Copy logs"),
+        Binding("t", "smoke_test", "Smoke test"),
         Binding("ctrl+t", "cycle_theme", "Theme"),
     ]
 
@@ -101,6 +102,14 @@ class VllmctlApp(App):
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         del parameters
+        if action == "smoke_test":
+            name = self._models.selected_model_name
+            if name is None:
+                return False
+            entry = self._entry_for(name)
+            if entry is None or entry.is_broken:
+                return False
+            return entry.status is not None and entry.status.running
         if action in self._MODEL_ONLY_ACTIONS:
             return self._models.selected_model_name is not None
         if action in self._MODEL_OR_PROFILE_ACTIONS:
@@ -413,6 +422,49 @@ class VllmctlApp(App):
         line_count = text.count("\n")
         suffix = " (truncated)" if truncated else ""
         self.notify(f"copied {line_count} lines to clipboard{suffix}", timeout=2)
+
+    def action_smoke_test(self) -> None:
+        if self._busy:
+            self.notify("another action is running", severity="warning", timeout=2)
+            return
+        name = self._models.selected_model_name
+        if name is None:
+            self.notify("no model selected", severity="warning", timeout=2)
+            return
+        self.notify(f"smoke testing {name}...", timeout=3)
+        self._busy = True
+        self.run_worker(self._do_smoke_test(name), exclusive=True)
+
+    async def _do_smoke_test(self, name: str) -> None:
+        try:
+            result = await asyncio.to_thread(
+                service.smoke_test_model,
+                self._options.project,
+                name,
+                host=self._options.health_host,
+            )
+        except service.SmokeTestError as exc:
+            self.notify(
+                f"smoke test failed: {exc}",
+                severity="error",
+                timeout=10,
+                markup=False,
+            )
+        except Exception as exc:
+            self.notify(
+                f"smoke test error: {exc}",
+                severity="error",
+                timeout=10,
+                markup=False,
+            )
+        else:
+            self.notify(
+                f"{result.model} · {result.latency_seconds:.2f}s",
+                severity="information",
+                timeout=4,
+            )
+        finally:
+            self._busy = False
 
     def action_cycle_theme(self) -> None:
         favorites = [

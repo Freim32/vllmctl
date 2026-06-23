@@ -127,3 +127,38 @@ def mock_vllm_metrics() -> Iterator[tuple[str, type[MockVllmMetricsHandler]]]:
     finally:
         server.shutdown()
         server.server_close()
+
+
+class MockCompletionsHandler(BaseHTTPRequestHandler):
+    """Mock vLLM /v1/completions endpoint for smoke-test integration tests."""
+
+    response_status = 200
+    response_body: bytes = b""
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        if length:
+            self.rfile.read(length)
+        self.send_response(self.response_status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(self.response_body)))
+        self.end_headers()
+        self.wfile.write(self.response_body)
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        return
+
+
+@pytest.fixture
+def mock_completions() -> Iterator[tuple[int, type[MockCompletionsHandler]]]:
+    """A configurable mock /v1/completions server. Yields (port, handler_class)."""
+    MockCompletionsHandler.response_status = 200
+    MockCompletionsHandler.response_body = b""
+    server = HTTPServer(("127.0.0.1", 0), MockCompletionsHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1], MockCompletionsHandler
+    finally:
+        server.shutdown()
+        server.server_close()

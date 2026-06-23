@@ -7,6 +7,7 @@ so they also run on Windows. Real spawn/terminate is exercised in test_lifecycle
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -781,3 +782,126 @@ def test_fast_exit_payload_is_valid_yaml(project: Project, tmp_path: Path) -> No
     write_model_yaml(project, "fail", fast_exit_payload("fail", port=18001))
     catalog = service.load_catalog_for(project)
     assert catalog.get("fail") is not None
+
+
+# --- smoke_test_model ---
+
+
+def _make_model_cfg(args: dict | None = None, extra: list[str] | None = None) -> object:
+    """Tiny ModelConfig builder for _resolve_served_name unit tests."""
+    from vllmctl.config import ModelConfig, VllmConfig  # noqa: PLC0415
+
+    return ModelConfig(
+        name="x",
+        vllm=VllmConfig(
+            model="hf/foo",
+            args=args or {},
+            extra_args=extra or [],
+        ),
+    )
+
+
+def test_resolve_served_name_falls_back_to_vllm_model() -> None:
+    cfg = _make_model_cfg()
+    assert service._resolve_served_name(cfg) == "hf/foo"
+
+
+def test_resolve_served_name_honors_args_dict() -> None:
+    cfg = _make_model_cfg(args={"--served-model-name": "alias"})
+    assert service._resolve_served_name(cfg) == "alias"
+
+
+def test_resolve_served_name_takes_first_when_list() -> None:
+    cfg = _make_model_cfg(args={"--served-model-name": ["primary", "alt"]})
+    assert service._resolve_served_name(cfg) == "primary"
+
+
+def test_resolve_served_name_honors_extra_args() -> None:
+    cfg = _make_model_cfg(extra=["--served-model-name", "from-extra"])
+    assert service._resolve_served_name(cfg) == "from-extra"
+
+
+def test_resolve_served_name_extra_args_without_value_falls_back() -> None:
+    cfg = _make_model_cfg(extra=["--served-model-name"])
+    assert service._resolve_served_name(cfg) == "hf/foo"
+
+
+def test_smoke_test_raises_for_unknown_model(project: Project) -> None:
+    with pytest.raises(service.UnknownModelError):
+        service.smoke_test_model(project, "does-not-exist")
+
+
+def test_smoke_test_raises_when_model_broken(project: Project) -> None:
+    bad = project.models_dir / "broken.yaml"
+    bad.write_text("name: broken\nbogus_field: 1\n", encoding="utf-8")
+    with pytest.raises(service.SmokeTestError, match="invalid YAML"):
+        service.smoke_test_model(project, "broken")
+
+
+def test_smoke_test_raises_when_model_not_running(project: Project) -> None:
+    write_model_yaml(project, "idle", sleeper_payload("idle", port=18001))
+    with pytest.raises(service.SmokeTestError, match="not running"):
+        service.smoke_test_model(project, "idle")
+
+
+@posix_only
+def test_smoke_test_returns_response_on_success(project: Project, mock_completions) -> None:
+    """End-to-end: spawn a sleeper, point the mock /v1/completions at its port,
+    smoke test parses the response."""
+    port, handler_class = mock_completions
+    handler_class.response_status = 200
+    handler_class.response_body = json.dumps(
+        {"choices": [{"text": " Hello there!"}]}
+    ).encode("utf-8")
+
+    write_model_yaml(project, "mock", sleeper_payload("mock", port=port))
+    service.start_model(project, "mock")
+    try:
+        result = service.smoke_test_model(project, "mock", host="127.0.0.1")
+    finally:
+        try:
+            service.stop_model(project, "mock", timeout=5)
+        except Exception:
+            pass
+
+    assert result.model == "mock"
+    assert "Hello there" in result.response_text
+    assert result.latency_seconds >= 0
+
+
+@posix_only
+def test_smoke_test_reports_http_error(project: Project, mock_completions) -> None:
+    port, handler_class = mock_completions
+    handler_class.response_status = 400
+    handler_class.response_body = json.dumps(
+        {"error": {"message": "model 'wrong-name' not found"}}
+    ).encode("utf-8")
+
+    write_model_yaml(project, "mock", sleeper_payload("mock", port=port))
+    service.start_model(project, "mock")
+    try:
+        with pytest.raises(service.SmokeTestError, match="HTTP 400"):
+            service.smoke_test_model(project, "mock", host="127.0.0.1")
+    finally:
+        try:
+            service.stop_model(project, "mock", timeout=5)
+        except Exception:
+            pass
+
+
+@posix_only
+def test_smoke_test_reports_malformed_response(project: Project, mock_completions) -> None:
+    port, handler_class = mock_completions
+    handler_class.response_status = 200
+    handler_class.response_body = b"not json at all"
+
+    write_model_yaml(project, "mock", sleeper_payload("mock", port=port))
+    service.start_model(project, "mock")
+    try:
+        with pytest.raises(service.SmokeTestError, match="unexpected response"):
+            service.smoke_test_model(project, "mock", host="127.0.0.1")
+    finally:
+        try:
+            service.stop_model(project, "mock", timeout=5)
+        except Exception:
+            pass

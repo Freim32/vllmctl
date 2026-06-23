@@ -4,6 +4,7 @@ Functions here never write to a console, prompt the user, or call sys.exit.
 They take resolved inputs, return data, and raise exceptions on failure.
 """
 
+import json
 import os
 import shlex
 import shutil
@@ -799,6 +800,134 @@ def restart_model(
         paths.pid_path.unlink()
 
     return start_model(project, model_name, config_dir)
+
+
+# --- smoke test ---
+
+
+class SmokeTestError(RuntimeError):
+    """A smoke test (one-shot /v1/completions probe) could not complete."""
+
+
+@dataclass(frozen=True)
+class SmokeTestResult:
+    model: str
+    served_model: str
+    response_text: str
+    latency_seconds: float
+
+
+def _resolve_served_name(model_cfg: ModelConfig) -> str:
+    """Resolve the name vLLM will serve under for /v1 routes.
+
+    Honors `--served-model-name` if present in `args` (dict) or `extra_args`
+    (list). vLLM accepts a list of names; we take the first. Falls back to
+    `vllm.model`.
+    """
+    args = model_cfg.vllm.args
+    if "--served-model-name" in args:
+        value = args["--served-model-name"]
+        if isinstance(value, list) and value:
+            return str(value[0])
+        return str(value)
+    extra = model_cfg.vllm.extra_args
+    for i, item in enumerate(extra):
+        if item == "--served-model-name" and i + 1 < len(extra):
+            return extra[i + 1]
+    return model_cfg.vllm.model
+
+
+def smoke_test_model(
+    project: Project,
+    model_name: str,
+    host: str = "127.0.0.1",
+    config_dir: Path | None = None,
+    prompt: str = "hello",
+    max_tokens: int = 10,
+    timeout: float = 30.0,
+) -> SmokeTestResult:
+    """POST a tiny completion to a running model and return the response.
+
+    Read-only with respect to the model: no state changes on either side.
+    Raises SmokeTestError if the model isn't running, has no metrics_port, or
+    the request fails. The `model` field sent to vLLM honors `--served-model-name`
+    when set in the YAML, otherwise falls back to `vllm.model`.
+    """
+    from vllmctl.config import load_model_file  # noqa: PLC0415
+
+    entry = next(
+        (e for e in list_catalog_entries(project, config_dir) if e.name == model_name),
+        None,
+    )
+    if entry is None:
+        raise UnknownModelError(model_name)
+    if entry.is_broken:
+        raise SmokeTestError(f"{model_name} has an invalid YAML")
+    if entry.status is None or not entry.status.running:
+        raise SmokeTestError(f"{model_name} is not running")
+    if entry.status.metrics_port is None:
+        raise SmokeTestError(f"{model_name} has no metrics_port configured")
+
+    try:
+        served = _resolve_served_name(load_model_file(entry.yaml_path))
+    except Exception as exc:
+        raise SmokeTestError(f"could not read YAML: {exc}") from exc
+
+    body = json.dumps(
+        {
+            "model": served,
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "temperature": 0,
+        }
+    ).encode("utf-8")
+    url = f"http://{host}:{entry.status.metrics_port}/v1/completions"
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    start = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        message = _extract_error_message(detail) or str(exc)
+        raise SmokeTestError(f"HTTP {exc.code}: {message}") from exc
+    except urllib.error.URLError as exc:
+        raise SmokeTestError(f"connection failed: {exc.reason}") from exc
+    elapsed = time.monotonic() - start
+
+    try:
+        payload = json.loads(raw)
+        text = payload["choices"][0]["text"]
+    except (KeyError, IndexError, json.JSONDecodeError) as exc:
+        raise SmokeTestError(f"unexpected response: {raw[:200]}") from exc
+
+    return SmokeTestResult(
+        model=model_name,
+        served_model=served,
+        response_text=text.strip(),
+        latency_seconds=elapsed,
+    )
+
+
+def _extract_error_message(body: str) -> str:
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return body[:200]
+    err = data.get("error")
+    if isinstance(err, dict):
+        msg = err.get("message")
+        if isinstance(msg, str):
+            return msg
+    if isinstance(err, str):
+        return err
+    return body[:200]
 
 
 def health_url(host: str, port: int) -> str:

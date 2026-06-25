@@ -24,6 +24,7 @@ from vllmctl.config import (
     load_catalog,
     load_catalog_or_empty,
 )
+from vllmctl.config_errors import explain_yaml_error
 from vllmctl.project import GENERAL_PROFILE, Project, init_project, load_project
 
 
@@ -769,12 +770,7 @@ def _build_model_status(
 
 def _short_yaml_error(exc: BaseException) -> str:
     """Trim a pydantic / yaml error to a single TUI-friendly line."""
-    text = str(exc)
-    for raw in text.splitlines():
-        stripped = raw.strip()
-        if stripped:
-            return stripped
-    return text or exc.__class__.__name__
+    return explain_yaml_error(exc).summary
 
 
 def start_model(

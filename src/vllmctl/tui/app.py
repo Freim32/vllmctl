@@ -405,12 +405,19 @@ class VllmctlApp(App):
             self.notify(f"editor failed: {editor_error}", severity="error", timeout=5)
             return
 
+        # Validate only the file just edited, not the whole catalog: a broken
+        # sibling YAML must not produce a misleading "your edit broke things"
+        # popup when the user didn't touch it.
+        from vllmctl.config import load_model_file  # noqa: PLC0415
+        from vllmctl.config_errors import explain_yaml_error  # noqa: PLC0415
+
         try:
-            service.load_catalog_for(project)
+            load_model_file(config_path)
             self.notify(f"saved {config_path.name}", timeout=2)
         except Exception as exc:
+            explanation = explain_yaml_error(exc)
             self.notify(
-                f"YAML invalid after edit:\n{exc}",
+                f"{config_path.name} has YAML issues:\n{explanation.summary}",
                 severity="error",
                 timeout=10,
                 markup=False,
